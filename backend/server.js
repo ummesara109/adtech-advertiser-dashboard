@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const supabase = require('./config/supabase');
 const { requireAuth } = require('./middleware/auth');
 
 const PORT = process.env.PORT || 5000;
@@ -21,6 +22,29 @@ app.get('/', (req, res) => {
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
+});
+
+// Temporary Supabase connection test
+app.get('/api/health/db', async (req, res) => {
+  try {
+    const { count, error } = await supabase
+      .from('users')
+      .select('*', { count: 'exact', head: true });
+
+    if (error) throw error;
+
+    res.json({
+      status: 'connected',
+      database: 'Supabase',
+      totalUsers: count
+    });
+  } catch (error) {
+    console.error('Database connection test failed:', error.message);
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
 });
 
 // Authentication routes
@@ -71,12 +95,10 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Local development
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`AdTech API running on port ${PORT}`);
   });
 }
 
-// Vercel
 module.exports = app;
