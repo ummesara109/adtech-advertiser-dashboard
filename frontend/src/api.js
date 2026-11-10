@@ -8,7 +8,7 @@ const API_BASE_URL = (
 ).replace(/\/$/, '');
 
 export const getToken = () => sessionStorage.getItem(TOKEN_KEY);
-export const setToken = (t) => sessionStorage.setItem(TOKEN_KEY);
+export const setToken = (t) => sessionStorage.setItem(TOKEN_KEY,t);
 export const clearToken = () => sessionStorage.removeItem(TOKEN_KEY);
 
 export async function api(path, { method = 'GET', body } = {}) {
