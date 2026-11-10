@@ -1,59 +1,185 @@
 const express = require('express');
-const { users, createUser, findUserByEmail, normEmail } = require('../data/store');
-const { createSession, destroySession, tokenFrom } = require('../middleware/auth');
-const { verifyPassword } = require('../utils/passwords');
+const supabase = require('../config/supabase');
+const {
+  createSession,
+  destroySession,
+  tokenFrom
+} = require('../middleware/auth');
+const {
+  hashPassword,
+  verifyPassword
+} = require('../utils/passwords');
 
 const router = express.Router();
 
-const publicUser = (u) => ({ id: u.id, name: u.name, email: u.email, role: u.role });
+const publicUser = (u) => ({
+  id: u.id,
+  name: u.name,
+  email: u.email,
+  role: u.role
+});
+
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-// Slow down password guessing: 10 failed logins per email in 15 minutes
-const failures = new Map(); // email -> { count, first }
+const failures = new Map();
 const WINDOW = 15 * 60 * 1000;
-const tooMany = (email) => {
-  const f = failures.get(email);
-  if (!f) return false;
-  if (Date.now() - f.first > WINDOW) return failures.delete(email), false;
-  return f.count >= 10;
-};
-const fail = (email) => {
-  const f = failures.get(email);
-  if (!f || Date.now() - f.first > WINDOW) failures.set(email, { count: 1, first: Date.now() });
-  else f.count += 1;
-};
 
-router.post('/register', (req, res) => {
-  const { name, email, password, company = '', phone = '' } = req.body || {};
-  const bad = (msg) => res.status(400).json({ error: msg });
-  if (!String(name || '').trim()) return bad('Enter your full name.');
-  if (!EMAIL.test(String(email || '').trim())) return bad('Enter a valid email address.');
-  if (String(password || '').length < 8) return bad('Choose a password with at least 8 characters.');
-  if (findUserByEmail(email)) return res.status(409).json({ error: 'An account with this email already exists. Log in instead.' });
+function tooMany(email) {
+  const entry = failures.get(email);
+  if (!entry) return false;
 
-  const user = createUser({ name: String(name).trim().slice(0, 80), email: String(email).trim(), password: String(password), company: String(company).trim().slice(0, 80), phone: String(phone).trim().slice(0, 30) });
-  res.status(201).json({ token: createSession(user.id), user: publicUser(user) });
-});
-
-router.post('/login', (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) return res.status(400).json({ error: 'Enter your email and password.' });
-  const key = normEmail(email);
-  if (tooMany(key)) return res.status(429).json({ error: 'Too many failed attempts. Try again in a few minutes.' });
-
-  const user = findUserByEmail(email);
-  if (!user || !verifyPassword(password, user.passwordHash)) {
-    fail(key);
-    return res.status(401).json({ error: 'Email or password is incorrect.' });
+  if (Date.now() - entry.first > WINDOW) {
+    failures.delete(email);
+    return false;
   }
-  failures.delete(key);
-  res.json({ token: createSession(user.id), user: publicUser(user) });
+
+  return entry.count >= 5;
+}
+
+function fail(email) {
+  const entry = failures.get(email);
+
+  if (!entry || Date.now() - entry.first > WINDOW) {
+    failures.set(email, { first: Date.now(), count: 1 });
+  } else {
+    entry.count++;
+  }
+}
+
+router.post('/register', async (req, res) => {
+  try {
+    const name = String(req.body.name || '').trim();
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const password = String(req.body.password || '');
+    const phone = String(req.body.phone || '');
+    const company = String(req.body.company || '');
+
+    if (!name || !EMAIL.test(email) || password.length < 8) {
+      return res.status(400).json({
+        error: 'Enter a valid name, email and password of at least 8 characters.'
+      });
+    }
+
+    const { data: existing, error: findError } = await supabase
+      .from('users')
+      .select('id, email')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (findError) throw findError;
+
+    // Temporary diagnostic response
+    if (existing) {
+      console.log('Registration duplicate detected:', existing.email);
+
+      return res.status(409).json({
+        error: 'Email lookup found an existing user.',
+        diagnostic: 'USER_FOUND'
+      });
+    }
+
+    console.log('Registration email lookup: no existing user found.');
+
+    const user = {
+      id: require('crypto').randomUUID(),
+      name,
+      email,
+      password_hash: hashPassword(password),
+      role: 'Advertiser',
+      phone,
+      company,
+      address: '',
+      verification: {
+        status: 'not_submitted',
+        legalName: '',
+        gstin: '',
+        pan: '',
+        document: null,
+        submittedAt: null,
+        note: ''
+      }
+    };
+
+    const { error: insertError } = await supabase
+      .from('users')
+      .insert(user);
+
+    if (insertError) throw insertError;
+
+    const token = await createSession(user.id);
+
+    return res.status(201).json({
+      token,
+      user: publicUser(user)
+    });
+  } catch (error) {
+    console.error('Registration error:', error.message);
+    return res.status(500).json({
+      error: 'Registration failed. Please try again.'
+    });
+  }
 });
 
-router.post('/logout', (req, res) => {
-  const token = tokenFrom(req);
-  if (token) destroySession(token);
-  res.json({ ok: true });
+router.post('/login', async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const password = String(req.body.password || '');
+
+    if (!EMAIL.test(email) || !password) {
+      return res.status(400).json({
+        error: 'Enter a valid email and password.'
+      });
+    }
+
+    if (tooMany(email)) {
+      return res.status(429).json({
+        error: 'Too many login attempts. Please try again later.'
+      });
+    }
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    if (!user || !verifyPassword(password, user.password_hash)) {
+      fail(email);
+      return res.status(401).json({
+        error: 'Invalid email or password.'
+      });
+    }
+
+    failures.delete(email);
+
+    const token = await createSession(user.id);
+
+    return res.json({
+      token,
+      user: publicUser(user)
+    });
+  } catch (error) {
+    console.error('Login error:', error.message);
+    return res.status(500).json({
+      error: 'Login failed. Please try again.'
+    });
+  }
+});
+
+router.post('/logout', async (req, res) => {
+  try {
+    const token = tokenFrom(req);
+
+    if (token) await destroySession(token);
+
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Logout error:', error.message);
+    return res.status(500).json({
+      error: 'Logout failed. Please try again.'
+    });
+  }
 });
 
 module.exports = router;
