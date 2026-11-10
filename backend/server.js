@@ -10,7 +10,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Root route - confirms backend is running
+// Root route
 app.get('/', (req, res) => {
   res.status(200).json({
     message: 'AdTech Advertiser Dashboard Backend is running!',
@@ -26,30 +26,26 @@ app.get('/api/health', (req, res) => {
 // Authentication routes
 app.use('/api/auth', require('./routes/auth'));
 
-// Serve uploaded creatives
-app.use(
-  '/uploads',
-  express.static(require('./routes/uploads').UPLOAD_DIR)
-);
-
-// Protected API routes
+// Protect all remaining API routes
 app.use('/api', requireAuth);
 
+// Protected routes
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/locations', require('./routes/locations'));
 app.use('/api/uploads', require('./routes/uploads'));
 app.use('/api/invoices', require('./routes/invoices'));
 app.use('/api/analytics', require('./routes/analytics'));
-
 app.use('/api', require('./routes/account'));
 
 // API not found
 app.use('/api', (req, res) => {
-  res.status(404).json({ error: 'Endpoint not found.' });
+  res.status(404).json({
+    error: 'Endpoint not found.'
+  });
 });
 
-// Serve frontend if build exists
+// Optional local frontend serving
 const dist = path.join(__dirname, '..', 'frontend', 'dist');
 
 if (fs.existsSync(dist)) {
@@ -75,6 +71,12 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`AdTech API running on port ${PORT}`);
-});
+// Local development
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`AdTech API running on port ${PORT}`);
+  });
+}
+
+// Vercel
+module.exports = app;
