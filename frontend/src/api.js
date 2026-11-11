@@ -2,20 +2,21 @@ import { useCallback, useEffect, useState } from 'react';
 
 const TOKEN_KEY = 'adtech_token';
 
-// Deployed backend URL
 const API_BASE_URL = (
-  import.meta.env.VITE_API_URL || ''
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.DEV ? '' : 'https://adtech-advertiser-dashboard-xvka.vercel.app')
 ).replace(/\/$/, '');
 
 export const getToken = () => sessionStorage.getItem(TOKEN_KEY);
-export const setToken = (t) => sessionStorage.setItem(TOKEN_KEY,t);
+export const setToken = (t) => sessionStorage.setItem(TOKEN_KEY, t);
 export const clearToken = () => sessionStorage.removeItem(TOKEN_KEY);
 
-export async function api(path, { method = 'GET', body } = {}) {
+export async function api(path, { method = 'GET', body, signal } = {}) {
   const token = getToken();
 
   const res = await fetch(`${API_BASE_URL}/api${path}`, {
     method,
+    signal,
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {})
@@ -37,7 +38,6 @@ export async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
-// Loads path and exposes { data, loading, error, reload }
 export function useApi(path) {
   const [state, setState] = useState({
     data: null,
@@ -49,42 +49,33 @@ export function useApi(path) {
 
   useEffect(() => {
     let alive = true;
+    const controller = new AbortController();
 
-    setState((s) => ({
-      ...s,
-      loading: true,
-      error: null
-    }));
+    setState(s => ({ ...s, loading: true, error: null }));
 
-    api(path)
-      .then((data) =>
-        alive && setState({
-          data,
-          loading: false,
-          error: null
-        })
-      )
-      .catch((e) =>
-        alive && setState({
-          data: null,
-          loading: false,
-          error: e.message
-        })
-      );
+    api(path, { signal: controller.signal })
+      .then(data => {
+        if (!alive) return;
+        setState({ data, loading: false, error: null });
+      })
+      .catch(e => {
+        if (!alive || e.name === 'AbortError') return;
+        setState(s => ({ ...s, loading: false, error: e.message }));
+      });
 
     return () => {
       alive = false;
+      controller.abort();
     };
   }, [path, tick]);
 
   const reload = useCallback(() => {
-    setTick((t) => t + 1);
+    setTick(t => t + 1);
   }, []);
 
   return { ...state, reload };
 }
 
-// Upload one file with progress
 export function uploadFile(file, onProgress, endpoint = '/api/uploads') {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -94,13 +85,17 @@ export function uploadFile(file, onProgress, endpoint = '/api/uploads') {
 
     xhr.open('POST', uploadUrl);
 
-    xhr.setRequestHeader('Authorization', `Bearer ${getToken()}`);
+    const token = getToken();
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
+
     xhr.setRequestHeader(
       'Content-Type',
       file.type || 'application/octet-stream'
     );
 
-    xhr.upload.onprogress = (e) => {
+    xhr.upload.onprogress = e => {
       if (e.lengthComputable) {
         onProgress(Math.round((e.loaded / e.total) * 100));
       }
@@ -108,12 +103,9 @@ export function uploadFile(file, onProgress, endpoint = '/api/uploads') {
 
     xhr.onload = () => {
       let data = {};
-
       try {
         data = JSON.parse(xhr.responseText);
-      } catch {
-        // Non-JSON response
-      }
+      } catch {}
 
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(data);
@@ -122,11 +114,9 @@ export function uploadFile(file, onProgress, endpoint = '/api/uploads') {
       }
     };
 
-    xhr.onerror = () => {
-      reject(new Error(
-        'Upload failed. Check your connection and try again.'
-      ));
-    };
+    xhr.onerror = () => reject(
+      new Error('Upload failed. Check your connection and try again.')
+    );
 
     xhr.send(file);
   });
