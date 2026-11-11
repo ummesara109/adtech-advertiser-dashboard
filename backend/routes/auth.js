@@ -1,10 +1,12 @@
 const express = require('express');
 const supabase = require('../config/supabase');
+
 const {
   createSession,
   destroySession,
   tokenFrom
 } = require('../middleware/auth');
+
 const {
   hashPassword,
   verifyPassword
@@ -25,6 +27,7 @@ const WINDOW = 15 * 60 * 1000;
 
 function tooMany(email) {
   const entry = failures.get(email);
+
   if (!entry) return false;
 
   if (Date.now() - entry.first > WINDOW) {
@@ -39,12 +42,16 @@ function fail(email) {
   const entry = failures.get(email);
 
   if (!entry || Date.now() - entry.first > WINDOW) {
-    failures.set(email, { first: Date.now(), count: 1 });
+    failures.set(email, {
+      first: Date.now(),
+      count: 1
+    });
   } else {
     entry.count++;
   }
 }
 
+// REGISTER
 router.post('/register', async (req, res) => {
   try {
     const name = String(req.body.name || '').trim();
@@ -67,17 +74,11 @@ router.post('/register', async (req, res) => {
 
     if (findError) throw findError;
 
-    // Temporary diagnostic response
     if (existing) {
-      console.log('Registration duplicate detected:', existing.email);
-
       return res.status(409).json({
-        error: 'Email lookup found an existing user.',
-        diagnostic: 'USER_FOUND'
+        error: 'An account with this email already exists.'
       });
     }
-
-    console.log('Registration email lookup: no existing user found.');
 
     const user = {
       id: require('crypto').randomUUID(),
@@ -105,20 +106,25 @@ router.post('/register', async (req, res) => {
 
     if (insertError) throw insertError;
 
-    const token = await createSession(user.id);
+    // IMPORTANT:
+    // Do not create a session or token during registration.
+    // The user must log in separately.
 
     return res.status(201).json({
-      token,
+      message: 'Account created successfully. Please log in.',
       user: publicUser(user)
     });
+
   } catch (error) {
     console.error('Registration error:', error.message);
+
     return res.status(500).json({
       error: 'Registration failed. Please try again.'
     });
   }
 });
 
+// LOGIN
 router.post('/login', async (req, res) => {
   try {
     const email = String(req.body.email || '').trim().toLowerCase();
@@ -146,6 +152,7 @@ router.post('/login', async (req, res) => {
 
     if (!user || !verifyPassword(password, user.password_hash)) {
       fail(email);
+
       return res.status(401).json({
         error: 'Invalid email or password.'
       });
@@ -153,29 +160,39 @@ router.post('/login', async (req, res) => {
 
     failures.delete(email);
 
+    // Create a session ONLY after successful login.
     const token = await createSession(user.id);
 
     return res.json({
       token,
       user: publicUser(user)
     });
+
   } catch (error) {
     console.error('Login error:', error.message);
+
     return res.status(500).json({
       error: 'Login failed. Please try again.'
     });
   }
 });
 
+// LOGOUT
 router.post('/logout', async (req, res) => {
   try {
     const token = tokenFrom(req);
 
-    if (token) await destroySession(token);
+    if (token) {
+      await destroySession(token);
+    }
 
-    return res.json({ ok: true });
+    return res.json({
+      ok: true
+    });
+
   } catch (error) {
     console.error('Logout error:', error.message);
+
     return res.status(500).json({
       error: 'Logout failed. Please try again.'
     });
