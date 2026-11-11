@@ -10,6 +10,7 @@ const HOLDING = [
   'Paused'
 ];
 
+// Calculate booked autos for the selected location and date range
 async function bookedAutos(locationId, startDate, endDate) {
   const { data, error } = await supabase
     .from('campaigns')
@@ -22,11 +23,13 @@ async function bookedAutos(locationId, startDate, endDate) {
   if (error) throw error;
 
   return (data || []).reduce(
-    (sum, campaign) => sum + Number(campaign.autos_booked || 0),
+    (sum, campaign) =>
+      sum + Number(campaign.autos_booked || 0),
     0
   );
 }
 
+// Calculate total, booked and available autos
 async function availability(locationId, startDate, endDate) {
   const { data: loc, error } = await supabase
     .from('locations')
@@ -37,17 +40,19 @@ async function availability(locationId, startDate, endDate) {
   if (error) throw error;
   if (!loc) return null;
 
+  const total = Math.max(0, Number(loc.total_autos) || 0);
+
   const booked = Math.min(
     await bookedAutos(locationId, startDate, endDate),
-    loc.total_autos
+    total
   );
 
   return {
     location: loc.id,
     name: loc.name,
-    total: loc.total_autos,
+    total,
     booked,
-    available: loc.total_autos - booked
+    available: total - booked
   };
 }
 
@@ -60,5 +65,3 @@ module.exports = {
   isTime,
   HOLDING
 };
-
-module.exports = { availability, todayIST, addDays, isDate, isTime, HOLDING };
